@@ -15,7 +15,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
 
-  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbx68YFI0TefdyotLX0lk25qx6n_7ZqP9Ar1J1v4idEyAP8_FDYaJ5iIJ5gt9X13wx_A1w/exec'
+  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6Xxl5SM7vU27laGJfykOC-pNYCXtt6T9jOsj37qVVlyovIZcQ/exec'
 
   // Carregar registros da planilha
   useEffect(() => {

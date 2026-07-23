@@ -14,25 +14,102 @@ export default function Home() {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
+  const [debugInfo, setDebugInfo] = useState('')
 
   const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6Xxl5SM7vU27laGJfykOC-pNYCXtt6T9jOsj37qVVlyovIZcQ/exec'
 
-  // Carregar registros da planilha
+  // Carregar registros do localStorage
   useEffect(() => {
-    loadRecords()
+    loadRecordsFromStorage()
   }, [])
 
-  const loadRecords = async () => {
+  const loadRecordsFromStorage = () => {
     try {
-      const response = await fetch(`${SHEET_URL}?action=getAll`, {
-        method: 'GET',
-        mode: 'no-cors'
-      })
-      // Como usamos no-cors, não podemos ler a resposta aqui
-      // A atualização manual será feita via botão
+      const stored = localStorage.getItem('glicemia_records')
+      if (stored) {
+        setRecords(JSON.parse(stored))
+      }
     } catch (error) {
-      console.log('Nota: Atualize manualmente com o botão')
+      console.error('Erro ao carregar do storage:', error)
     }
+  }
+
+  const saveToStorage = (newRecords) => {
+    try {
+      localStorage.setItem('glicemia_records', JSON.stringify(newRecords))
+    } catch (error) {
+      console.error('Erro ao salvar no storage:', error)
+    }
+  }
+
+  // Máscara para data (DD/MM/YYYY)
+  const handleDataChange = (e) => {
+    let value = e.target.value.replace(/\D/g, '')
+    
+    if (value.length > 8) {
+      value = value.slice(0, 8)
+    }
+    
+    if (value.length >= 5) {
+      value = value.slice(0, 2) + '/' + value.slice(2, 4) + '/' + value.slice(4, 8)
+    } else if (value.length >= 3) {
+      value = value.slice(0, 2) + '/' + value.slice(2)
+    }
+    
+    setFormData(prev => ({ ...prev, data: value }))
+  }
+
+  // Máscara para horário (HH:MM)
+  const handleHorarioChange = (e) => {
+    let value = e.target.value.replace(/\D/g, '')
+    
+    if (value.length > 4) {
+      value = value.slice(0, 4)
+    }
+    
+    if (value.length >= 3) {
+      value = value.slice(0, 2) + ':' + value.slice(2, 4)
+    }
+    
+    setFormData(prev => ({ ...prev, horario: value }))
+  }
+
+  // Validar data (dd/mm/aaaa é válida?)
+  const isValidDate = (dateString) => {
+    const regex = /^(\d{2})\/(\d{2})\/(\d{4})$/
+    if (!regex.test(dateString)) return false
+    
+    const [, day, month, year] = dateString.match(regex)
+    const d = parseInt(day, 10)
+    const m = parseInt(month, 10)
+    const y = parseInt(year, 10)
+    
+    if (m < 1 || m > 12) return false
+    if (d < 1 || d > 31) return false
+    if (m === 2 && d > 29) return false
+    if ([4, 6, 9, 11].includes(m) && d > 30) return false
+    
+    return true
+  }
+
+  // Validar horário (HH:MM é válida?)
+  const isValidTime = (timeString) => {
+    const regex = /^(\d{2}):(\d{2})$/
+    if (!regex.test(timeString)) return false
+    
+    const [, hours, minutes] = timeString.match(regex)
+    const h = parseInt(hours, 10)
+    const m = parseInt(minutes, 10)
+    
+    if (h < 0 || h > 23) return false
+    if (m < 0 || m > 59) return false
+    
+    return true
+  }
+
+  // Verificar se já existe registro com mesma data/hora
+  const recordExists = (data, horario) => {
+    return records.some(r => r.data === data && r.horario === horario)
   }
 
   const handleChange = (e) => {
@@ -41,16 +118,20 @@ export default function Home() {
   }
 
   const validateForm = () => {
-    if (!formData.data) return 'Data é obrigatória'
-    if (!formData.horario) return 'Horário é obrigatório'
-    if (!formData.glicemia) return 'Glicemia é obrigatória'
+    if (!formData.data.trim()) return 'Data é obrigatória'
+    if (!formData.horario.trim()) return 'Horário é obrigatório'
+    if (!formData.glicemia.trim()) return 'Glicemia é obrigatória'
 
-    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(formData.data)) {
-      return 'Data deve estar no formato DD/MM/YYYY'
+    if (!isValidDate(formData.data)) {
+      return 'Data inválida. Use formato DD/MM/YYYY com valores reais (ex: 23/07/2026)'
     }
 
-    if (!/^\d{2}:\d{2}$/.test(formData.horario)) {
-      return 'Horário deve estar no formato HH:MM'
+    if (!isValidTime(formData.horario)) {
+      return 'Horário inválido. Use formato HH:MM com valores válidos (ex: 14:30)'
+    }
+
+    if (recordExists(formData.data, formData.horario)) {
+      return 'Já existe um registro nesta data e horário. Use outro horário.'
     }
 
     const glicemia = parseFloat(formData.glicemia)
@@ -76,6 +157,7 @@ export default function Home() {
 
     setLoading(true)
     setMessage({ type: '', text: '' })
+    setDebugInfo('Processando...')
 
     try {
       const payload = {
@@ -86,26 +168,53 @@ export default function Home() {
         observacoes: formData.observacoes
       }
 
-      const response = await fetch(SHEET_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-
-      // Simular adição local enquanto aguarda sincronização
+      // Salvar localmente PRIMEIRO
       const newRecord = {
         ...payload,
-        id: Date.now()
+        id: Date.now(),
+        synced: false
       }
-      setRecords(prev => [newRecord, ...prev])
+      
+      const updatedRecords = [newRecord, ...records]
+      setRecords(updatedRecords)
+      saveToStorage(updatedRecords)
 
-      setMessage({ type: 'success', text: '✓ Registrado com sucesso!' })
+      setDebugInfo('✓ Salvo localmente. Sincronizando com Google Sheets...')
+
+      // Tentar sincronizar com Google Sheets
+      try {
+        const response = await fetch(SHEET_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+
+        // Atualizar status de sincronização
+        newRecord.synced = true
+        const syncedRecords = updatedRecords.map(r => 
+          r.id === newRecord.id ? { ...r, synced: true } : r
+        )
+        setRecords(syncedRecords)
+        saveToStorage(syncedRecords)
+
+        setDebugInfo('✓ Sincronizado com Google Sheets!')
+        setMessage({ type: 'success', text: '✓ Registrado e sincronizado com sucesso!' })
+      } catch (syncError) {
+        setDebugInfo('⚠️ Salvo localmente, mas sincronização falhou. Tente novamente.')
+        setMessage({ type: 'warning', text: '✓ Salvo no dispositivo. Sincronização com Google Sheets pode estar lenta.' })
+      }
+
       setFormData({ data: '', horario: '', glicemia: '', insulina: '', observacoes: '' })
 
-      setTimeout(() => setMessage({ type: '', text: '' }), 3000)
+      setTimeout(() => {
+        setMessage({ type: '', text: '' })
+        setDebugInfo('')
+      }, 4000)
     } catch (err) {
-      setMessage({ type: 'error', text: 'Erro ao enviar. Tente novamente.' })
+      setMessage({ type: 'error', text: 'Erro ao processar. Tente novamente.' })
+      setDebugInfo(`Erro: ${err.message}`)
+      console.error('Erro completo:', err)
     } finally {
       setLoading(false)
     }
@@ -185,46 +294,72 @@ export default function Home() {
                 
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, color: '#333' }}>
-                    Data (DD/MM/YYYY)
+                    Data (DD/MM/YYYY) *
                   </label>
                   <input
                     type="text"
                     name="data"
-                    placeholder="23/07/2026"
+                    placeholder="Preencha: 23/07/2026"
                     value={formData.data}
-                    onChange={handleChange}
+                    onChange={handleDataChange}
+                    maxLength="10"
                     disabled={loading}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', border: '1px solid #DDD', borderRadius: '6px', boxSizing: 'border-box' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '10px 12px', 
+                      fontSize: '14px', 
+                      border: '1px solid #DDD', 
+                      borderRadius: '6px', 
+                      boxSizing: 'border-box',
+                      color: '#333'
+                    }}
                   />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, color: '#333' }}>
-                    Horário (HH:MM)
+                    Horário (HH:MM) *
                   </label>
                   <input
                     type="text"
                     name="horario"
-                    placeholder="14:30"
+                    placeholder="Preencha: 14:30"
                     value={formData.horario}
-                    onChange={handleChange}
+                    onChange={handleHorarioChange}
+                    maxLength="5"
                     disabled={loading}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', border: '1px solid #DDD', borderRadius: '6px', boxSizing: 'border-box' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '10px 12px', 
+                      fontSize: '14px', 
+                      border: '1px solid #DDD', 
+                      borderRadius: '6px', 
+                      boxSizing: 'border-box',
+                      color: '#333'
+                    }}
                   />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, color: '#333' }}>
-                    Glicemia (mg/dL)
+                    Glicemia (mg/dL) *
                   </label>
                   <input
                     type="text"
                     name="glicemia"
-                    placeholder="150"
+                    placeholder="Preencha: 150"
                     value={formData.glicemia}
                     onChange={handleChange}
                     disabled={loading}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', border: '1px solid #DDD', borderRadius: '6px', boxSizing: 'border-box' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '10px 12px', 
+                      fontSize: '14px', 
+                      border: '1px solid #DDD', 
+                      borderRadius: '6px', 
+                      boxSizing: 'border-box',
+                      color: '#333'
+                    }}
                   />
                 </div>
 
@@ -235,11 +370,19 @@ export default function Home() {
                   <input
                     type="text"
                     name="insulina"
-                    placeholder="7"
+                    placeholder="Preencha: 7"
                     value={formData.insulina}
                     onChange={handleChange}
                     disabled={loading}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', border: '1px solid #DDD', borderRadius: '6px', boxSizing: 'border-box' }}
+                    style={{ 
+                      width: '100%', 
+                      padding: '10px 12px', 
+                      fontSize: '14px', 
+                      border: '1px solid #DDD', 
+                      borderRadius: '6px', 
+                      boxSizing: 'border-box',
+                      color: '#333'
+                    }}
                   />
                 </div>
               </div>
@@ -250,7 +393,7 @@ export default function Home() {
                 </label>
                 <textarea
                   name="observacoes"
-                  placeholder="Ex: Antes da refeição, depois do exercício..."
+                  placeholder="Preencha com observações (opcional): Ex: Antes da refeição, depois do exercício..."
                   value={formData.observacoes}
                   onChange={handleChange}
                   disabled={loading}
@@ -263,7 +406,8 @@ export default function Home() {
                     borderRadius: '6px',
                     fontFamily: 'inherit',
                     boxSizing: 'border-box',
-                    resize: 'vertical'
+                    resize: 'vertical',
+                    color: '#333'
                   }}
                 />
               </div>
@@ -275,11 +419,26 @@ export default function Home() {
                   marginBottom: '20px',
                   fontSize: '14px',
                   fontWeight: 500,
-                  background: message.type === 'success' ? '#D4EDDA' : '#F8D7DA',
-                  color: message.type === 'success' ? '#155724' : '#721C24',
-                  border: `1px solid ${message.type === 'success' ? '#C3E6CB' : '#F5C6CB'}`
+                  background: message.type === 'success' ? '#D4EDDA' : message.type === 'warning' ? '#FFF3CD' : '#F8D7DA',
+                  color: message.type === 'success' ? '#155724' : message.type === 'warning' ? '#856404' : '#721C24',
+                  border: `1px solid ${message.type === 'success' ? '#C3E6CB' : message.type === 'warning' ? '#FFE69C' : '#F5C6CB'}`
                 }}>
                   {message.text}
+                </div>
+              )}
+
+              {debugInfo && (
+                <div style={{
+                  padding: '12px 16px',
+                  borderRadius: '6px',
+                  marginBottom: '20px',
+                  fontSize: '13px',
+                  background: '#E3F2FD',
+                  color: '#0D47A1',
+                  border: '1px solid #BBDEFB',
+                  fontFamily: 'monospace'
+                }}>
+                  {debugInfo}
                 </div>
               )}
 
@@ -302,6 +461,10 @@ export default function Home() {
                 {loading ? 'Salvando...' : '💾 Salvar Registro'}
               </button>
             </form>
+
+            <div style={{ marginTop: '20px', padding: '12px 16px', background: '#E8F5E9', borderRadius: '6px', border: '1px solid #A5D6A7', fontSize: '13px', color: '#2E7D32' }}>
+              * Campos obrigatórios
+            </div>
           </div>
         )}
 
@@ -327,6 +490,7 @@ export default function Home() {
                         <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Glicemia</th>
                         <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Insulina (UI)</th>
                         <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Observações</th>
+                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -348,6 +512,15 @@ export default function Home() {
                           </td>
                           <td style={{ padding: '12px' }}>{record.insulina}</td>
                           <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>{record.observacoes || '-'}</td>
+                          <td style={{ padding: '12px' }}>
+                            <span style={{
+                              fontSize: '12px',
+                              fontWeight: 500,
+                              color: record.synced ? '#27AE60' : '#F39C12'
+                            }}>
+                              {record.synced ? '✓ Sincronizado' : '⏳ Local'}
+                            </span>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

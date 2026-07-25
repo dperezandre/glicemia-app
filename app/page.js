@@ -12,7 +12,7 @@ export default function Home() {
   const [debugInfo, setDebugInfo]       = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
 
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZItsltZmXWFTDMalZhwC-Y0vJWrZPQ32nloxI9Jbv825s4dcfQ/exec'
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyabYjafAP2CW1Byin-m8VZU2vMj5SM6bXekQyb_f6xoozBfcTpxIie2PrlkvzTAoZU/exec'
   // ─── Ao montar: tenta carregar da planilha, fallback localStorage ─────────
   useEffect(() => { loadFromSheet() }, [])
 
@@ -73,8 +73,9 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
     const date = new Date(dateText)
     if (Number.isNaN(date.getTime())) return dateText
 
-    const pad = (number) => String(number).padStart(2, '0')
-    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo'
+    }).format(date)
   }
 
   const formatTime = (value) => {
@@ -85,8 +86,12 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
     const date = new Date(timeText)
     if (Number.isNaN(date.getTime())) return timeText
 
-    const pad = (number) => String(number).padStart(2, '0')
-    return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    }).format(date)
   }
 
   const sortByDateTime = (arr) => {
@@ -228,17 +233,17 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
   const glicemiaColor = (v) => {
     if (!v) return '#999'
     const n = parseFloat(v)
-    if (n < 70)  return '#FFA500'
-    if (n > 140) return '#E74C3C'
+    if (n < 80)  return '#3498DB'
+    if (n > 150) return '#E74C3C'
     return '#27AE60'
   }
 
   const glicemiaLabel = (v) => {
     if (!v) return 'Não medido'
     const n = parseFloat(v)
-    if (n < 70)  return 'Baixa'
-    if (n > 140) return 'Alta'
-    return 'Normal'
+    if (n < 80)  return 'Baixo'
+    if (n > 150) return 'Alto'
+    return 'Médio'
   }
 
   // ─── Resumo ───────────────────────────────────────────────────────────────
@@ -247,9 +252,9 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
     const total = records.length
     const med   = comG.length
     if (med === 0) return { total, med, normal: 0, alta: 0, baixa: 0, semG: total, normalPct: 0, altaPct: 0, baixaPct: 0 }
-    const normal = comG.filter(r => { const n = +r.glicemia; return n >= 70 && n <= 140 }).length
-    const alta   = comG.filter(r => +r.glicemia > 140).length
-    const baixa  = comG.filter(r => +r.glicemia < 70).length
+    const normal = comG.filter(r => { const n = +r.glicemia; return n >= 80 && n <= 150 }).length
+    const alta   = comG.filter(r => +r.glicemia > 150).length
+    const baixa  = comG.filter(r => +r.glicemia < 80).length
     const pct    = (n) => Math.round((n / med) * 100)
     return { total, med, normal, alta, baixa, semG: total - med, normalPct: pct(normal), altaPct: pct(alta), baixaPct: pct(baixa) }
   })()
@@ -465,9 +470,9 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
                 <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#333' }}>Distribuição por status</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
                   {[
-                    { label: 'Normal', range: '70–140 mg/dL', val: summary.normal, pct: summary.normalPct, color: '#27AE60', bg: '#E8F8F5', border: '#A9DFBF', dot: '#27AE60' },
-                    { label: 'Alto',   range: '>140 mg/dL',   val: summary.alta,   pct: summary.altaPct,   color: '#E74C3C', bg: '#FADBD8', border: '#F5B7B1', dot: '#E74C3C' },
-                    { label: 'Baixo',  range: '<70 mg/dL',    val: summary.baixa,  pct: summary.baixaPct,  color: '#FFA500', bg: '#FEF8DC', border: '#F9E79F', dot: '#FFA500' }
+                    { label: 'Médio', range: '80–150 mg/dL', val: summary.normal, pct: summary.normalPct, color: '#27AE60', bg: '#E8F8F5', border: '#A9DFBF', dot: '#27AE60' },
+                    { label: 'Alto',  range: '>150 mg/dL',   val: summary.alta,   pct: summary.altaPct,   color: '#E74C3C', bg: '#FADBD8', border: '#F5B7B1', dot: '#E74C3C' },
+                    { label: 'Baixo', range: '<80 mg/dL',    val: summary.baixa,  pct: summary.baixaPct,  color: '#3498DB', bg: '#E3F2FD', border: '#90CAF9', dot: '#3498DB' }
                   ].map(s => (
                     <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: '8px', padding: '20px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>

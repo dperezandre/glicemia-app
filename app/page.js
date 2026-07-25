@@ -12,12 +12,10 @@ export default function Home() {
   const [debugInfo, setDebugInfo]       = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
 
-  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZItsltZmXWFTDMalZhwC-Y0vJWrZPQ32nloxI9Jbv825s4dcfQ/exec'
-
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZItsltZmXWFTDMalZhwC-Y0vJWrZPQ32nloxI9Jbv825s4dcfQ/exec'
   // ─── Ao montar: tenta carregar da planilha, fallback localStorage ─────────
   useEffect(() => { loadFromSheet() }, [])
 
-  // BUG 7 CORRIGIDO: GET sem mode:'no-cors' → resposta pode ser lida
   const loadFromSheet = async () => {
     setSyncingSheet(true)
     try {
@@ -30,10 +28,8 @@ export default function Home() {
         saveLocal(sorted)
         return
       }
-      // Se retornou mas sem sucesso, usa localStorage
       loadLocal()
     } catch (_) {
-      // Sem conexão ou Apps Script com erro → localStorage como fallback
       loadLocal()
     } finally {
       setSyncingSheet(false)
@@ -43,7 +39,10 @@ export default function Home() {
   const loadLocal = () => {
     try {
       const stored = localStorage.getItem('glicemia_records')
-      if (stored) setRecords(JSON.parse(stored))
+      if (stored) {
+        const recs = JSON.parse(stored)
+        setRecords(sortByDateTime(recs))
+      }
     } catch (_) {}
   }
 
@@ -51,15 +50,20 @@ export default function Home() {
     try { localStorage.setItem('glicemia_records', JSON.stringify(recs)) } catch (_) {}
   }
 
-  // ─── Ordenação por timestamp real ────────────────────────────────────────
+  // ─── Ordenação por timestamp real (MAIS RECENTE PRIMEIRO) ────────────────
   const toTs = (data, horario) => {
     const [d, m, a] = data.split('/')
     const [h, min]  = horario.split(':')
     return new Date(a, m - 1, d, h, min).getTime()
   }
 
-  const sortByDateTime = (arr) =>
-    [...arr].sort((a, b) => toTs(b.data, b.horario) - toTs(a.data, a.horario))
+  const sortByDateTime = (arr) => {
+    return [...arr].sort((a, b) => {
+      const tsA = toTs(a.data, a.horario)
+      const tsB = toTs(b.data, b.horario)
+      return tsB - tsA // MAIS RECENTE PRIMEIRO (descendente)
+    })
+  }
 
   // ─── Máscaras ─────────────────────────────────────────────────────────────
   const handleDataChange = (e) => {
@@ -120,12 +124,17 @@ export default function Home() {
     setMessage({ type: '', text: '' })
     setDebugInfo('Salvando...')
 
+    // MELHORIA: Concatena "Dose de Insulina: " antes do valor se insulina preenchida
+    const insulinaFormatted = formData.insulina.trim() 
+      ? `Dose de Insulina: ${formData.insulina}`
+      : '-'
+
     const payload = {
       action:      'add',
       data:        formData.data,
       horario:     formData.horario,
       glicemia:    formData.glicemia || null,
-      insulina:    formData.insulina || '-',
+      insulina:    insulinaFormatted,  // Agora com prefixo
       observacoes: formData.observacoes
     }
 
@@ -135,7 +144,7 @@ export default function Home() {
     setRecords(merged)
     saveLocal(merged)
 
-    // Envia para planilha (POST com no-cors — não lemos resposta, só escrevemos)
+    // Envia para planilha
     try {
       await fetch(SHEET_URL, {
         method:  'POST',
@@ -310,7 +319,7 @@ export default function Home() {
         {activeTab === 'dashboard' && (
           <div style={{ background: 'white', padding: '30px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-              <h2 style={{ margin: 0, fontSize: '20px', color: '#333' }}>Histórico (da planilha — mais recentes primeiro)</h2>
+              <h2 style={{ margin: 0, fontSize: '20px', color: '#333' }}>Histórico (mais recentes primeiro)</h2>
               <button onClick={loadFromSheet} disabled={syncingSheet} style={BTN('#3498DB', syncingSheet)}>
                 {syncingSheet ? '⏳ Atualizando...' : '🔄 Atualizar da Planilha'}
               </button>
@@ -334,47 +343,55 @@ export default function Home() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '2px solid #1F4E78' }}>
-                      {['Data','Horário','Glicemia','Insulina (UI)','Observações','Status','Ação'].map(h => (
+                      {['Data','Horário','Glicemia','Insulina','Observações','Status','Ação'].map(h => (
                         <th key={h} style={{ padding: '12px', textAlign: h === 'Ação' ? 'center' : 'left', fontWeight: 600, color: '#1F4E78', fontSize: '14px' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {records.map((rec, i) => (
-                      <tr key={rec.id} style={{ borderBottom: '1px solid #DDD', background: i % 2 === 0 ? '#F9F9F9' : 'white' }}>
-                        <td style={{ padding: '12px', fontSize: '14px' }}>{rec.data}</td>
-                        <td style={{ padding: '12px', fontSize: '14px' }}>{rec.horario}</td>
-                        <td style={{ padding: '12px' }}>
-                          <span style={{ background: glicemiaColor(rec.glicemia), color: 'white', padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
-                            {rec.glicemia ? `${rec.glicemia} (${glicemiaLabel(rec.glicemia)})` : '—'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px', fontSize: '14px' }}>{rec.insulina}</td>
-                        <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>{rec.observacoes || '—'}</td>
-                        <td style={{ padding: '12px', fontSize: '12px', fontWeight: 500, color: rec.synced ? '#27AE60' : '#F39C12' }}>
-                          {rec.synced ? '✓ Sincronizado' : '⏳ Local'}
-                        </td>
-                        <td style={{ padding: '12px', textAlign: 'center' }}>
-                          {deleteConfirm === rec.id ? (
-                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                              <button onClick={() => handleDelete(rec.id, { data: rec.data, horario: rec.horario })} disabled={loading}
-                                style={{ padding: '4px 10px', fontSize: '12px', fontWeight: 600, background: '#E74C3C', color: 'white', border: 'none', borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer' }}>
-                                Sim
+                    {records.map((rec, i) => {
+                      // MELHORIA: Formatar data e horário para exibição
+                      const dataFormatada = rec.data // Já vem formatada (DD/MM/YYYY)
+                      const horarioFormatado = rec.horario // Já vem formatada (HH:MM)
+
+                      return (
+                        <tr key={rec.id} style={{ borderBottom: '1px solid #DDD', background: i % 2 === 0 ? '#F9F9F9' : 'white' }}>
+                          <td style={{ padding: '12px', fontSize: '14px' }}>{dataFormatada}</td>
+                          <td style={{ padding: '12px', fontSize: '14px' }}>{horarioFormatado}</td>
+                          <td style={{ padding: '12px' }}>
+                            <span style={{ background: glicemiaColor(rec.glicemia), color: 'white', padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
+                              {rec.glicemia ? `${rec.glicemia} (${glicemiaLabel(rec.glicemia)})` : '—'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px', fontSize: '14px' }}>
+                            {rec.insulina === '-' ? '—' : rec.insulina}
+                          </td>
+                          <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>{rec.observacoes || '—'}</td>
+                          <td style={{ padding: '12px', fontSize: '12px', fontWeight: 500, color: rec.synced ? '#27AE60' : '#F39C12' }}>
+                            {rec.synced ? '✓ Sincronizado' : '⏳ Local'}
+                          </td>
+                          <td style={{ padding: '12px', textAlign: 'center' }}>
+                            {deleteConfirm === rec.id ? (
+                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                <button onClick={() => handleDelete(rec.id, { data: rec.data, horario: rec.horario })} disabled={loading}
+                                  style={{ padding: '4px 10px', fontSize: '12px', fontWeight: 600, background: '#E74C3C', color: 'white', border: 'none', borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer' }}>
+                                  Sim
+                                </button>
+                                <button onClick={() => setDeleteConfirm(null)}
+                                  style={{ padding: '4px 10px', fontSize: '12px', fontWeight: 600, background: '#999', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setDeleteConfirm(rec.id)} disabled={loading}
+                                style={{ padding: '4px 12px', fontSize: '12px', fontWeight: 600, background: '#E74C3C', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', opacity: loading ? 0.6 : 1 }}>
+                                🗑️ Deletar
                               </button>
-                              <button onClick={() => setDeleteConfirm(null)}
-                                style={{ padding: '4px 10px', fontSize: '12px', fontWeight: 600, background: '#999', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                Não
-                              </button>
-                            </div>
-                          ) : (
-                            <button onClick={() => setDeleteConfirm(rec.id)} disabled={loading}
-                              style={{ padding: '4px 12px', fontSize: '12px', fontWeight: 600, background: '#E74C3C', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', opacity: loading ? 0.6 : 1 }}>
-                              🗑️ Deletar
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -433,6 +450,48 @@ export default function Home() {
                       </div>
                     </div>
                   ))}
+                </div>
+
+                {/* MELHORIA: Tabela formatada com data/hora DD/MM/YYYY HH:MM */}
+                <div style={{ marginTop: '28px' }}>
+                  <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#333' }}>Histórico detalhado</h3>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid #1F4E78', background: '#F0F0F0' }}>
+                          <th style={{ padding: '10px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Data</th>
+                          <th style={{ padding: '10px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Horário</th>
+                          <th style={{ padding: '10px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Glicemia</th>
+                          <th style={{ padding: '10px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Insulina</th>
+                          <th style={{ padding: '10px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Observações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {records.map((rec, idx) => (
+                          <tr key={rec.id} style={{ borderBottom: '1px solid #EEE', background: idx % 2 === 0 ? '#F9F9F9' : 'white' }}>
+                            <td style={{ padding: '10px' }}>{rec.data}</td>
+                            <td style={{ padding: '10px' }}>{rec.horario}</td>
+                            <td style={{ padding: '10px' }}>
+                              {rec.glicemia ? (
+                                <span style={{ 
+                                  background: glicemiaColor(rec.glicemia), 
+                                  color: 'white', 
+                                  padding: '2px 8px', 
+                                  borderRadius: '12px', 
+                                  fontSize: '12px', 
+                                  fontWeight: 500 
+                                }}>
+                                  {rec.glicemia}
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td style={{ padding: '10px' }}>{rec.insulina === '-' ? '—' : rec.insulina}</td>
+                            <td style={{ padding: '10px', color: '#666' }}>{rec.observacoes || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: '24px', padding: '14px 16px', background: '#E3F2FD', border: '1px solid #BBDEFB', borderRadius: '8px', fontSize: '13px', color: '#0D47A1' }}>

@@ -15,6 +15,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
   const [debugInfo, setDebugInfo] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
 const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6Xxl5SM7vU27laGJfykOC-pNYCXtt6T9jOsj37qVVlyovIZcQ/exec'
 
@@ -39,6 +40,47 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
       localStorage.setItem('glicemia_records', JSON.stringify(newRecords))
     } catch (error) {
       console.error('Erro ao salvar no storage:', error)
+    }
+  }
+
+  // NOVA FUNÇÃO: Deletar registro
+  const handleDeleteRecord = async (recordId, recordData) => {
+    setLoading(true)
+    setMessage({ type: '', text: '' })
+
+    try {
+      // 1. Deletar do localStorage
+      const updatedRecords = records.filter(r => r.id !== recordId)
+      setRecords(updatedRecords)
+      saveToStorage(updatedRecords)
+
+      // 2. Tentar deletar da planilha (enviar requisição ao Apps Script)
+      try {
+        const deletePayload = {
+          action: 'delete',
+          data: recordData.data,
+          horario: recordData.horario
+        }
+
+        await fetch(SHEET_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(deletePayload)
+        })
+
+        setMessage({ type: 'success', text: '✓ Registro deletado com sucesso!' })
+      } catch (syncError) {
+        setMessage({ type: 'warning', text: '✓ Deletado localmente. Sincronização com Google Sheets pode estar lenta.' })
+      }
+
+      setDeleteConfirm(null)
+      setTimeout(() => setMessage({ type: '', text: '' }), 3000)
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Erro ao deletar registro. Tente novamente.' })
+      console.error('Erro ao deletar:', err)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -128,7 +170,6 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
     if (!formData.data.trim()) return 'Data é obrigatória'
     if (!formData.horario.trim()) return 'Horário é obrigatório'
     
-    // NOVA LÓGICA: Glicemia é obrigatória APENAS se insulina estiver vazia
     if (!formData.insulina.trim() && !formData.glicemia.trim()) {
       return 'Preencha pelo menos Glicemia OU Insulina'
     }
@@ -145,7 +186,6 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
       return 'Já existe um registro nesta data e horário. Use outro horário.'
     }
 
-    // Se glicemia foi preenchida, validar
     if (formData.glicemia.trim()) {
       const glicemia = parseFloat(formData.glicemia)
       if (isNaN(glicemia) || glicemia < 0 || glicemia > 500) {
@@ -160,12 +200,11 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
     return null
   }
 
-  // NOVA FUNÇÃO: Ordenar registros por data/hora (mais recentes primeiro)
+  // Ordenar registros por data/hora (mais recentes primeiro)
   const sortRecordsByDateTime = (recordsToSort) => {
     return [...recordsToSort].sort((a, b) => {
       const timestampA = dateToTimestamp(a.data, a.horario)
       const timestampB = dateToTimestamp(b.data, b.horario)
-      // Mais recentes primeiro (descending)
       return timestampB - timestampA
     })
   }
@@ -187,26 +226,23 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
       const payload = {
         data: formData.data,
         horario: formData.horario,
-        glicemia: formData.glicemia || null,  // MUDANÇA: null em vez de valor vazio
+        glicemia: formData.glicemia || null,
         insulina: formData.insulina || '-',
         observacoes: formData.observacoes
       }
 
-      // Salvar localmente PRIMEIRO
       const newRecord = {
         ...payload,
         id: Date.now(),
         synced: false
       }
       
-      // MUDANÇA: Ordenar registros após adicionar novo
       const updatedRecords = sortRecordsByDateTime([newRecord, ...records])
       setRecords(updatedRecords)
       saveToStorage(updatedRecords)
 
       setDebugInfo('✓ Salvo localmente e reorganizado. Sincronizando com Google Sheets...')
 
-      // Tentar sincronizar com Google Sheets
       try {
         const response = await fetch(SHEET_URL, {
           method: 'POST',
@@ -215,7 +251,6 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
           body: JSON.stringify(payload)
         })
 
-        // Atualizar status de sincronização
         newRecord.synced = true
         const syncedRecords = updatedRecords.map(r => 
           r.id === newRecord.id ? { ...r, synced: true } : r
@@ -261,6 +296,58 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
     return 'Normal'
   }
 
+  // NOVA FUNÇÃO: Calcular resumo de glicemia
+  const calculateGlicemiaSummary = () => {
+    const withGlicemia = records.filter(r => r.glicemia !== null && r.glicemia !== '')
+    
+    if (withGlicemia.length === 0) {
+      return {
+        total: records.length,
+        medidos: 0,
+        normal: 0,
+        alta: 0,
+        baixa: 0,
+        naoMedidos: records.length,
+        normalPct: 0,
+        altaPct: 0,
+        baixaPct: 0,
+        naoMedidosPct: 100
+      }
+    }
+
+    const normal = withGlicemia.filter(r => {
+      const num = parseFloat(r.glicemia)
+      return num >= 70 && num <= 140
+    }).length
+
+    const alta = withGlicemia.filter(r => {
+      const num = parseFloat(r.glicemia)
+      return num > 140
+    }).length
+
+    const baixa = withGlicemia.filter(r => {
+      const num = parseFloat(r.glicemia)
+      return num < 70
+    }).length
+
+    const naoMedidos = records.length - withGlicemia.length
+
+    return {
+      total: records.length,
+      medidos: withGlicemia.length,
+      normal,
+      alta,
+      baixa,
+      naoMedidos,
+      normalPct: Math.round((normal / withGlicemia.length) * 100),
+      altaPct: Math.round((alta / withGlicemia.length) * 100),
+      baixaPct: Math.round((baixa / withGlicemia.length) * 100),
+      naoMedidosPct: Math.round((naoMedidos / records.length) * 100)
+    }
+  }
+
+  const summary = calculateGlicemiaSummary()
+
   return (
     <div style={{ minHeight: '100vh', background: '#F5F5F5' }}>
       {/* Header */}
@@ -278,7 +365,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
       {/* Main Container */}
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px' }}>
         {/* Tabs */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '2px solid #DDD' }}>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '2px solid #DDD', overflowX: 'auto' }}>
           <button
             onClick={() => setActiveTab('form')}
             style={{
@@ -290,7 +377,8 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
               color: activeTab === 'form' ? 'white' : '#333',
               cursor: 'pointer',
               borderBottom: activeTab === 'form' ? '3px solid #1F4E78' : 'none',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              whiteSpace: 'nowrap'
             }}
           >
             Novo Registro
@@ -306,10 +394,28 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
               color: activeTab === 'dashboard' ? 'white' : '#333',
               cursor: 'pointer',
               borderBottom: activeTab === 'dashboard' ? '3px solid #1F4E78' : 'none',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              whiteSpace: 'nowrap'
             }}
           >
             Histórico ({records.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('resumo')}
+            style={{
+              padding: '12px 24px',
+              fontSize: '15px',
+              fontWeight: 500,
+              border: 'none',
+              background: activeTab === 'resumo' ? '#1F4E78' : 'transparent',
+              color: activeTab === 'resumo' ? 'white' : '#333',
+              cursor: 'pointer',
+              borderBottom: activeTab === 'resumo' ? '3px solid #1F4E78' : 'none',
+              transition: 'all 0.2s',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Resumo
           </button>
         </div>
 
@@ -519,6 +625,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
                         <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Insulina (UI)</th>
                         <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Observações</th>
                         <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Status</th>
+                        <th style={{ padding: '12px', textAlign: 'center', fontWeight: 600, color: '#1F4E78' }}>Ação</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -549,10 +656,284 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
                               {record.synced ? '✓ Sincronizado' : '⏳ Local'}
                             </span>
                           </td>
+                          <td style={{ padding: '12px', textAlign: 'center' }}>
+                            {deleteConfirm === record.id ? (
+                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                <button
+                                  onClick={() => handleDeleteRecord(record.id, { data: record.data, horario: record.horario })}
+                                  disabled={loading}
+                                  style={{
+                                    padding: '4px 8px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    background: '#E74C3C',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: loading ? 'not-allowed' : 'pointer',
+                                    opacity: loading ? 0.6 : 1
+                                  }}
+                                >
+                                  Sim
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirm(null)}
+                                  disabled={loading}
+                                  style={{
+                                    padding: '4px 8px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    background: '#999',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteConfirm(record.id)}
+                                disabled={loading}
+                                style={{
+                                  padding: '4px 12px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  background: '#E74C3C',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  opacity: loading ? 0.6 : 1
+                                }}
+                              >
+                                🗑️ Deletar
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Resumo Tab */}
+        {activeTab === 'resumo' && (
+          <div style={{ background: 'white', padding: '30px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+            <h2 style={{ marginTop: 0, marginBottom: '30px', fontSize: '20px', color: '#333' }}>
+              📊 Resumo de Glicemia
+            </h2>
+
+            {records.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: '#999' }}>
+                <p style={{ fontSize: '16px', marginBottom: '8px' }}>Nenhum registro para resumo</p>
+                <p style={{ fontSize: '14px' }}>Adicione registros para ver o resumo</p>
+              </div>
+            ) : (
+              <div>
+                {/* Cards Principais */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+                  
+                  {/* Total */}
+                  <div style={{
+                    background: '#E3F2FD',
+                    border: '2px solid #3498DB',
+                    borderRadius: '8px',
+                    padding: '20px',
+                    textAlign: 'center'
+                  }}>
+                    <p style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#0D47A1', fontWeight: 500 }}>
+                      Total de Medições
+                    </p>
+                    <p style={{ margin: 0, fontSize: '32px', fontWeight: 600, color: '#3498DB' }}>
+                      {summary.total}
+                    </p>
+                  </div>
+
+                  {/* Medidos */}
+                  <div style={{
+                    background: '#E8F5E9',
+                    border: '2px solid #27AE60',
+                    borderRadius: '8px',
+                    padding: '20px',
+                    textAlign: 'center'
+                  }}>
+                    <p style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#2E7D32', fontWeight: 500 }}>
+                      Medições com Glicemia
+                    </p>
+                    <p style={{ margin: 0, fontSize: '32px', fontWeight: 600, color: '#27AE60' }}>
+                      {summary.medidos}
+                    </p>
+                  </div>
+
+                  {/* Não Medidos */}
+                  <div style={{
+                    background: '#F5F5F5',
+                    border: '2px solid #999',
+                    borderRadius: '8px',
+                    padding: '20px',
+                    textAlign: 'center'
+                  }}>
+                    <p style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#666', fontWeight: 500 }}>
+                      Apenas Insulina
+                    </p>
+                    <p style={{ margin: 0, fontSize: '32px', fontWeight: 600, color: '#999' }}>
+                      {summary.naoMedidos}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Status de Glicemia */}
+                <div>
+                  <h3 style={{ margin: '0 0 20px 0', fontSize: '18px', color: '#333' }}>
+                    Distribuição por Status de Glicemia
+                  </h3>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
+                    
+                    {/* Verde - Normal */}
+                    <div style={{
+                      background: '#E8F8F5',
+                      border: '1px solid #A9DFBF',
+                      borderRadius: '8px',
+                      padding: '20px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                        <div style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          background: '#27AE60'
+                        }}></div>
+                        <h4 style={{ margin: 0, fontSize: '16px', color: '#2E7D32', fontWeight: 600 }}>
+                          Normal
+                        </h4>
+                      </div>
+                      <p style={{ margin: '0 0 8px 0', fontSize: '24px', fontWeight: 600, color: '#27AE60' }}>
+                        {summary.normal}
+                      </p>
+                      <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>
+                        {summary.normalPct}% das medições
+                      </p>
+                      <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#999' }}>
+                        (70–140 mg/dL)
+                      </p>
+                      <div style={{
+                        marginTop: '12px',
+                        background: 'white',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        height: '8px'
+                      }}>
+                        <div style={{
+                          width: `${summary.normalPct}%`,
+                          height: '100%',
+                          background: '#27AE60',
+                          transition: 'width 0.3s'
+                        }}></div>
+                      </div>
+                    </div>
+
+                    {/* Vermelho - Alto */}
+                    <div style={{
+                      background: '#FADBD8',
+                      border: '1px solid #F5B7B1',
+                      borderRadius: '8px',
+                      padding: '20px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                        <div style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          background: '#E74C3C'
+                        }}></div>
+                        <h4 style={{ margin: 0, fontSize: '16px', color: '#C0392B', fontWeight: 600 }}>
+                          Alto
+                        </h4>
+                      </div>
+                      <p style={{ margin: '0 0 8px 0', fontSize: '24px', fontWeight: 600, color: '#E74C3C' }}>
+                        {summary.alta}
+                      </p>
+                      <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>
+                        {summary.altaPct}% das medições
+                      </p>
+                      <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#999' }}>
+                        (&gt;140 mg/dL)
+                      </p>
+                      <div style={{
+                        marginTop: '12px',
+                        background: 'white',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        height: '8px'
+                      }}>
+                        <div style={{
+                          width: `${summary.altaPct}%`,
+                          height: '100%',
+                          background: '#E74C3C',
+                          transition: 'width 0.3s'
+                        }}></div>
+                      </div>
+                    </div>
+
+                    {/* Amarelo - Baixo */}
+                    <div style={{
+                      background: '#FEF8DC',
+                      border: '1px solid #F9E79F',
+                      borderRadius: '8px',
+                      padding: '20px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                        <div style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          background: '#FFA500'
+                        }}></div>
+                        <h4 style={{ margin: 0, fontSize: '16px', color: '#E67E22', fontWeight: 600 }}>
+                          Baixo
+                        </h4>
+                      </div>
+                      <p style={{ margin: '0 0 8px 0', fontSize: '24px', fontWeight: 600, color: '#FFA500' }}>
+                        {summary.baixa}
+                      </p>
+                      <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>
+                        {summary.baixaPct}% das medições
+                      </p>
+                      <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#999' }}>
+                        (&lt;70 mg/dL)
+                      </p>
+                      <div style={{
+                        marginTop: '12px',
+                        background: 'white',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        height: '8px'
+                      }}>
+                        <div style={{
+                          width: `${summary.baixaPct}%`,
+                          height: '100%',
+                          background: '#FFA500',
+                          transition: 'width 0.3s'
+                        }}></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Info Box */}
+                <div style={{ marginTop: '30px', padding: '16px', background: '#E3F2FD', border: '1px solid #BBDEFB', borderRadius: '8px' }}>
+                  <p style={{ margin: 0, fontSize: '13px', color: '#0D47A1' }}>
+                    <strong>ℹ️ Info:</strong> Este resumo inclui apenas medições com glicemia preenchida.
+                    Registros apenas com insulina não são contabilizados no resumo de status.
+                  </p>
                 </div>
               </div>
             )}

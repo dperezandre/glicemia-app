@@ -23,7 +23,12 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
       const json = await res.json()
 
       if (json.success && Array.isArray(json.records)) {
-        const sorted = sortByDateTime(json.records)
+        const normalized = json.records.map(record => ({
+          ...record,
+          data: formatDate(record.data),
+          horario: formatTime(record.horario)
+        }))
+        const sorted = sortByDateTime(normalized)
         setRecords(sorted)
         saveLocal(sorted)
         return
@@ -40,7 +45,11 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
     try {
       const stored = localStorage.getItem('glicemia_records')
       if (stored) {
-        const recs = JSON.parse(stored)
+        const recs = JSON.parse(stored).map(record => ({
+          ...record,
+          data: formatDate(record.data),
+          horario: formatTime(record.horario)
+        }))
         setRecords(sortByDateTime(recs))
       }
     } catch (_) {}
@@ -55,6 +64,29 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
     const [d, m, a] = data.split('/')
     const [h, min]  = horario.split(':')
     return new Date(a, m - 1, d, h, min).getTime()
+  }
+
+  const formatDate = (value) => {
+    const dateText = String(value ?? '').trim()
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateText)) return dateText
+
+    const date = new Date(dateText)
+    if (Number.isNaN(date.getTime())) return dateText
+
+    const pad = (number) => String(number).padStart(2, '0')
+    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`
+  }
+
+  const formatTime = (value) => {
+    const timeText = String(value ?? '').trim()
+    const timeMatch = timeText.match(/^(\d{1,2}):(\d{2})/)
+    if (timeMatch) return `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`
+
+    const date = new Date(timeText)
+    if (Number.isNaN(date.getTime())) return timeText
+
+    const pad = (number) => String(number).padStart(2, '0')
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}`
   }
 
   const sortByDateTime = (arr) => {
@@ -351,8 +383,8 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
                   <tbody>
                     {records.map((rec, i) => {
                       // MELHORIA: Formatar data e horário para exibição
-                      const dataFormatada = rec.data // Já vem formatada (DD/MM/YYYY)
-                      const horarioFormatado = rec.horario // Já vem formatada (HH:MM)
+                      const dataFormatada = formatDate(rec.data)
+                      const horarioFormatado = formatTime(rec.horario)
 
                       return (
                         <tr key={rec.id} style={{ borderBottom: '1px solid #DDD', background: i % 2 === 0 ? '#F9F9F9' : 'white' }}>
@@ -469,8 +501,8 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyYZYCtRRcej2BNzTjAZI
                       <tbody>
                         {records.map((rec, idx) => (
                           <tr key={rec.id} style={{ borderBottom: '1px solid #EEE', background: idx % 2 === 0 ? '#F9F9F9' : 'white' }}>
-                            <td style={{ padding: '10px' }}>{rec.data}</td>
-                            <td style={{ padding: '10px' }}>{rec.horario}</td>
+                            <td style={{ padding: '10px' }}>{formatDate(rec.data)}</td>
+                            <td style={{ padding: '10px' }}>{formatTime(rec.horario)}</td>
                             <td style={{ padding: '10px' }}>
                               {rec.glicemia ? (
                                 <span style={{ 

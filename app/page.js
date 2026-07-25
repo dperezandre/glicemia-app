@@ -16,7 +16,7 @@ export default function Home() {
   const [message, setMessage] = useState({ type: '', text: '' })
   const [debugInfo, setDebugInfo] = useState('')
 
-  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6Xxl5SM7vU27laGJfykOC-pNYCXtt6T9jOsj37qVVlyovIZcQ/exec'
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6Xxl5SM7vU27laGJfykOC-pNYCXtt6T9jOsj37qVVlyovIZcQ/exec'
 
   // Carregar registros do localStorage
   useEffect(() => {
@@ -40,6 +40,13 @@ export default function Home() {
     } catch (error) {
       console.error('Erro ao salvar no storage:', error)
     }
+  }
+
+  // Converter data DD/MM/YYYY para timestamp para comparação
+  const dateToTimestamp = (data, horario) => {
+    const [dia, mes, ano] = data.split('/')
+    const [horas, minutos] = horario.split(':')
+    return new Date(ano, mes - 1, dia, horas, minutos).getTime()
   }
 
   // Máscara para data (DD/MM/YYYY)
@@ -120,7 +127,11 @@ export default function Home() {
   const validateForm = () => {
     if (!formData.data.trim()) return 'Data é obrigatória'
     if (!formData.horario.trim()) return 'Horário é obrigatório'
-    if (!formData.glicemia.trim()) return 'Glicemia é obrigatória'
+    
+    // NOVA LÓGICA: Glicemia é obrigatória APENAS se insulina estiver vazia
+    if (!formData.insulina.trim() && !formData.glicemia.trim()) {
+      return 'Preencha pelo menos Glicemia OU Insulina'
+    }
 
     if (!isValidDate(formData.data)) {
       return 'Data inválida. Use formato DD/MM/YYYY com valores reais (ex: 23/07/2026)'
@@ -134,9 +145,12 @@ export default function Home() {
       return 'Já existe um registro nesta data e horário. Use outro horário.'
     }
 
-    const glicemia = parseFloat(formData.glicemia)
-    if (isNaN(glicemia) || glicemia < 0 || glicemia > 500) {
-      return 'Glicemia deve ser um número entre 0 e 500'
+    // Se glicemia foi preenchida, validar
+    if (formData.glicemia.trim()) {
+      const glicemia = parseFloat(formData.glicemia)
+      if (isNaN(glicemia) || glicemia < 0 || glicemia > 500) {
+        return 'Glicemia deve ser um número entre 0 e 500'
+      }
     }
 
     if (formData.insulina && isNaN(parseFloat(formData.insulina))) {
@@ -144,6 +158,16 @@ export default function Home() {
     }
 
     return null
+  }
+
+  // NOVA FUNÇÃO: Ordenar registros por data/hora (mais recentes primeiro)
+  const sortRecordsByDateTime = (recordsToSort) => {
+    return [...recordsToSort].sort((a, b) => {
+      const timestampA = dateToTimestamp(a.data, a.horario)
+      const timestampB = dateToTimestamp(b.data, b.horario)
+      // Mais recentes primeiro (descending)
+      return timestampB - timestampA
+    })
   }
 
   const handleSubmit = async (e) => {
@@ -163,7 +187,7 @@ export default function Home() {
       const payload = {
         data: formData.data,
         horario: formData.horario,
-        glicemia: formData.glicemia,
+        glicemia: formData.glicemia || null,  // MUDANÇA: null em vez de valor vazio
         insulina: formData.insulina || '-',
         observacoes: formData.observacoes
       }
@@ -175,11 +199,12 @@ export default function Home() {
         synced: false
       }
       
-      const updatedRecords = [newRecord, ...records]
+      // MUDANÇA: Ordenar registros após adicionar novo
+      const updatedRecords = sortRecordsByDateTime([newRecord, ...records])
       setRecords(updatedRecords)
       saveToStorage(updatedRecords)
 
-      setDebugInfo('✓ Salvo localmente. Sincronizando com Google Sheets...')
+      setDebugInfo('✓ Salvo localmente e reorganizado. Sincronizando com Google Sheets...')
 
       // Tentar sincronizar com Google Sheets
       try {
@@ -199,9 +224,9 @@ export default function Home() {
         saveToStorage(syncedRecords)
 
         setDebugInfo('✓ Sincronizado com Google Sheets!')
-        setMessage({ type: 'success', text: '✓ Registrado e sincronizado com sucesso!' })
+        setMessage({ type: 'success', text: '✓ Registrado, reorganizado e sincronizado com sucesso!' })
       } catch (syncError) {
-        setDebugInfo('⚠️ Salvo localmente, mas sincronização falhou. Tente novamente.')
+        setDebugInfo('⚠️ Salvo e reorganizado, mas sincronização falhou. Tente novamente.')
         setMessage({ type: 'warning', text: '✓ Salvo no dispositivo. Sincronização com Google Sheets pode estar lenta.' })
       }
 
@@ -221,6 +246,7 @@ export default function Home() {
   }
 
   const getGlicemiaColor = (valor) => {
+    if (valor === null || valor === '') return '#999'
     const num = parseFloat(valor)
     if (num < 70) return '#FFA500'
     if (num > 140) return '#E74C3C'
@@ -228,6 +254,7 @@ export default function Home() {
   }
 
   const getGlicemiaLabel = (valor) => {
+    if (valor === null || valor === '') return 'Não medido'
     const num = parseFloat(valor)
     if (num < 70) return 'Baixa'
     if (num > 140) return 'Alta'
@@ -342,12 +369,12 @@ export default function Home() {
 
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, color: '#333' }}>
-                    Glicemia (mg/dL) *
+                    Glicemia (mg/dL)
                   </label>
                   <input
                     type="text"
                     name="glicemia"
-                    placeholder="Preencha: 150"
+                    placeholder="Preencha: 150 (opcional)"
                     value={formData.glicemia}
                     onChange={handleChange}
                     disabled={loading}
@@ -370,7 +397,7 @@ export default function Home() {
                   <input
                     type="text"
                     name="insulina"
-                    placeholder="Preencha: 7"
+                    placeholder="Preencha: 7 (opcional)"
                     value={formData.insulina}
                     onChange={handleChange}
                     disabled={loading}
@@ -463,7 +490,8 @@ export default function Home() {
             </form>
 
             <div style={{ marginTop: '20px', padding: '12px 16px', background: '#E8F5E9', borderRadius: '6px', border: '1px solid #A5D6A7', fontSize: '13px', color: '#2E7D32' }}>
-              * Campos obrigatórios
+              * Campos obrigatórios: Data e Horário<br/>
+              💡 Novo: Preencha Glicemia OU Insulina (ou ambos)
             </div>
           </div>
         )}
@@ -479,7 +507,7 @@ export default function Home() {
             ) : (
               <div>
                 <h2 style={{ marginTop: 0, marginBottom: '20px', fontSize: '20px', color: '#333' }}>
-                  Últimos Registros
+                  Últimos Registros (Ordenados por Data/Hora - Mais Recentes Primeiro)
                 </h2>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -507,7 +535,7 @@ export default function Home() {
                               fontSize: '13px',
                               fontWeight: 500
                             }}>
-                              {record.glicemia} ({getGlicemiaLabel(record.glicemia)})
+                              {record.glicemia ? `${record.glicemia} (${getGlicemiaLabel(record.glicemia)})` : '—'}
                             </span>
                           </td>
                           <td style={{ padding: '12px' }}>{record.insulina}</td>

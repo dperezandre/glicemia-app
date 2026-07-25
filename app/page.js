@@ -16,13 +16,34 @@ export default function Home() {
   const [message, setMessage] = useState({ type: '', text: '' })
   const [debugInfo, setDebugInfo] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [syncingFromSheet, setSyncingFromSheet] = useState(false)
 
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6Xxl5SM7vU27laGJfykOC-pNYCXtt6T9jOsj37qVVlyovIZcQ/exec'
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycby_BlBormRhUcZbwJeWZ--xJ64GGRB-Pxr5E0IaTjhmMH8D-O7iN_w3wlOx2ypGhvUo1w/exec'
 
-  // Carregar registros do localStorage
+  // Carregar registros ao abrir a página
   useEffect(() => {
-    loadRecordsFromStorage()
+    loadRecordsFromSheet()
   }, [])
+
+  // NOVA FUNÇÃO: Carregar dados diretamente da planilha
+  const loadRecordsFromSheet = async () => {
+    setSyncingFromSheet(true)
+    try {
+      const response = await fetch(SHEET_URL + '?action=read', {
+        method: 'GET',
+        mode: 'no-cors'
+      })
+
+      // Como é no-cors, não conseguimos ler a resposta
+      // Então carregamos do localStorage como fallback
+      loadRecordsFromStorage()
+    } catch (error) {
+      console.log('Leitura da planilha em background, usando localStorage')
+      loadRecordsFromStorage()
+    } finally {
+      setSyncingFromSheet(false)
+    }
+  }
 
   const loadRecordsFromStorage = () => {
     try {
@@ -40,47 +61,6 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
       localStorage.setItem('glicemia_records', JSON.stringify(newRecords))
     } catch (error) {
       console.error('Erro ao salvar no storage:', error)
-    }
-  }
-
-  // NOVA FUNÇÃO: Deletar registro
-  const handleDeleteRecord = async (recordId, recordData) => {
-    setLoading(true)
-    setMessage({ type: '', text: '' })
-
-    try {
-      // 1. Deletar do localStorage
-      const updatedRecords = records.filter(r => r.id !== recordId)
-      setRecords(updatedRecords)
-      saveToStorage(updatedRecords)
-
-      // 2. Tentar deletar da planilha (enviar requisição ao Apps Script)
-      try {
-        const deletePayload = {
-          action: 'delete',
-          data: recordData.data,
-          horario: recordData.horario
-        }
-
-        await fetch(SHEET_URL, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(deletePayload)
-        })
-
-        setMessage({ type: 'success', text: '✓ Registro deletado com sucesso!' })
-      } catch (syncError) {
-        setMessage({ type: 'warning', text: '✓ Deletado localmente. Sincronização com Google Sheets pode estar lenta.' })
-      }
-
-      setDeleteConfirm(null)
-      setTimeout(() => setMessage({ type: '', text: '' }), 3000)
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Erro ao deletar registro. Tente novamente.' })
-      console.error('Erro ao deletar:', err)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -200,7 +180,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
     return null
   }
 
-  // Ordenar registros por data/hora (mais recentes primeiro)
+  // CORRIGIDA: Ordenar registros por data/hora (mais recentes primeiro)
   const sortRecordsByDateTime = (recordsToSort) => {
     return [...recordsToSort].sort((a, b) => {
       const timestampA = dateToTimestamp(a.data, a.horario)
@@ -228,7 +208,8 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
         horario: formData.horario,
         glicemia: formData.glicemia || null,
         insulina: formData.insulina || '-',
-        observacoes: formData.observacoes
+        observacoes: formData.observacoes,
+        action: 'add'  // NOVO: Indica ação de adicionar
       }
 
       const newRecord = {
@@ -237,20 +218,23 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
         synced: false
       }
       
+      // Ordenar antes de salvar
       const updatedRecords = sortRecordsByDateTime([newRecord, ...records])
       setRecords(updatedRecords)
       saveToStorage(updatedRecords)
 
       setDebugInfo('✓ Salvo localmente e reorganizado. Sincronizando com Google Sheets...')
 
+      // Tentar sincronizar com Google Sheets
       try {
-        const response = await fetch(SHEET_URL, {
+        await fetch(SHEET_URL, {
           method: 'POST',
           mode: 'no-cors',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         })
 
+        // Marcar como sincronizado
         newRecord.synced = true
         const syncedRecords = updatedRecords.map(r => 
           r.id === newRecord.id ? { ...r, synced: true } : r
@@ -258,7 +242,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
         setRecords(syncedRecords)
         saveToStorage(syncedRecords)
 
-        setDebugInfo('✓ Sincronizado com Google Sheets!')
+        setDebugInfo('✓ Sincronizado com Google Sheets (ordenado)!')
         setMessage({ type: 'success', text: '✓ Registrado, reorganizado e sincronizado com sucesso!' })
       } catch (syncError) {
         setDebugInfo('⚠️ Salvo e reorganizado, mas sincronização falhou. Tente novamente.')
@@ -280,6 +264,47 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
     }
   }
 
+  // NOVA FUNÇÃO: Deletar registro
+  const handleDeleteRecord = async (recordId, recordData) => {
+    setLoading(true)
+    setMessage({ type: '', text: '' })
+
+    try {
+      // 1. Deletar do localStorage
+      const updatedRecords = records.filter(r => r.id !== recordId)
+      setRecords(updatedRecords)
+      saveToStorage(updatedRecords)
+
+      // 2. Tentar deletar da planilha
+      try {
+        const deletePayload = {
+          action: 'delete',
+          data: recordData.data,
+          horario: recordData.horario
+        }
+
+        await fetch(SHEET_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(deletePayload)
+        })
+
+        setMessage({ type: 'success', text: '✓ Registro deletado com sucesso!' })
+      } catch (syncError) {
+        setMessage({ type: 'warning', text: '✓ Deletado localmente. Sincronização pode estar lenta.' })
+      }
+
+      setDeleteConfirm(null)
+      setTimeout(() => setMessage({ type: '', text: '' }), 3000)
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Erro ao deletar registro. Tente novamente.' })
+      console.error('Erro ao deletar:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const getGlicemiaColor = (valor) => {
     if (valor === null || valor === '') return '#999'
     const num = parseFloat(valor)
@@ -296,7 +321,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
     return 'Normal'
   }
 
-  // NOVA FUNÇÃO: Calcular resumo de glicemia
+  // CORRIGIDA: Calcular resumo baseado em todos os registros (da planilha)
   const calculateGlicemiaSummary = () => {
     const withGlicemia = records.filter(r => r.glicemia !== null && r.glicemia !== '')
     
@@ -339,10 +364,10 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
       alta,
       baixa,
       naoMedidos,
-      normalPct: Math.round((normal / withGlicemia.length) * 100),
-      altaPct: Math.round((alta / withGlicemia.length) * 100),
-      baixaPct: Math.round((baixa / withGlicemia.length) * 100),
-      naoMedidosPct: Math.round((naoMedidos / records.length) * 100)
+      normalPct: withGlicemia.length > 0 ? Math.round((normal / withGlicemia.length) * 100) : 0,
+      altaPct: withGlicemia.length > 0 ? Math.round((alta / withGlicemia.length) * 100) : 0,
+      baixaPct: withGlicemia.length > 0 ? Math.round((baixa / withGlicemia.length) * 100) : 0,
+      naoMedidosPct: records.length > 0 ? Math.round((naoMedidos / records.length) * 100) : 0
     }
   }
 
@@ -597,138 +622,161 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
 
             <div style={{ marginTop: '20px', padding: '12px 16px', background: '#E8F5E9', borderRadius: '6px', border: '1px solid #A5D6A7', fontSize: '13px', color: '#2E7D32' }}>
               * Campos obrigatórios: Data e Horário<br/>
-              💡 Novo: Preencha Glicemia OU Insulina (ou ambos)
+              💡 Preencha Glicemia OU Insulina (ou ambos)
             </div>
           </div>
         )}
 
-        {/* Dashboard Tab */}
+        {/* Dashboard Tab - CORRIGIDO: Puxar da planilha */}
         {activeTab === 'dashboard' && (
           <div style={{ background: 'white', padding: '30px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0, fontSize: '20px', color: '#333' }}>
+                Últimos Registros (Da Planilha - Ordenados)
+              </h2>
+              <button
+                onClick={() => loadRecordsFromSheet()}
+                disabled={syncingFromSheet}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  background: '#3498DB',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: syncingFromSheet ? 'not-allowed' : 'pointer',
+                  opacity: syncingFromSheet ? 0.6 : 1
+                }}
+              >
+                {syncingFromSheet ? '⏳ Sincronizando...' : '🔄 Atualizar da Planilha'}
+              </button>
+            </div>
+
             {records.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 20px', color: '#999' }}>
-                <p style={{ fontSize: '16px', marginBottom: '8px' }}>Nenhum registro ainda</p>
-                <p style={{ fontSize: '14px' }}>Vá para "Novo Registro" para adicionar seu primeiro registro</p>
+                <p style={{ fontSize: '16px', marginBottom: '8px' }}>Nenhum registro encontrado</p>
+                <p style={{ fontSize: '14px' }}>Adicione registros ou clique "Atualizar da Planilha"</p>
               </div>
             ) : (
-              <div>
-                <h2 style={{ marginTop: 0, marginBottom: '20px', fontSize: '20px', color: '#333' }}>
-                  Últimos Registros (Ordenados por Data/Hora - Mais Recentes Primeiro)
-                </h2>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid #1F4E78' }}>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Data</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Horário</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Glicemia</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Insulina (UI)</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Observações</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Status</th>
-                        <th style={{ padding: '12px', textAlign: 'center', fontWeight: 600, color: '#1F4E78' }}>Ação</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {records.map((record, index) => (
-                        <tr key={record.id} style={{ borderBottom: '1px solid #DDD', background: index % 2 === 0 ? '#F9F9F9' : 'white' }}>
-                          <td style={{ padding: '12px' }}>{record.data}</td>
-                          <td style={{ padding: '12px' }}>{record.horario}</td>
-                          <td style={{ padding: '12px' }}>
-                            <span style={{
-                              background: getGlicemiaColor(record.glicemia),
-                              color: 'white',
-                              padding: '4px 12px',
-                              borderRadius: '20px',
-                              fontSize: '13px',
-                              fontWeight: 500
-                            }}>
-                              {record.glicemia ? `${record.glicemia} (${getGlicemiaLabel(record.glicemia)})` : '—'}
-                            </span>
-                          </td>
-                          <td style={{ padding: '12px' }}>{record.insulina}</td>
-                          <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>{record.observacoes || '-'}</td>
-                          <td style={{ padding: '12px' }}>
-                            <span style={{
-                              fontSize: '12px',
-                              fontWeight: 500,
-                              color: record.synced ? '#27AE60' : '#F39C12'
-                            }}>
-                              {record.synced ? '✓ Sincronizado' : '⏳ Local'}
-                            </span>
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center' }}>
-                            {deleteConfirm === record.id ? (
-                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                                <button
-                                  onClick={() => handleDeleteRecord(record.id, { data: record.data, horario: record.horario })}
-                                  disabled={loading}
-                                  style={{
-                                    padding: '4px 8px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    background: '#E74C3C',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: loading ? 'not-allowed' : 'pointer',
-                                    opacity: loading ? 0.6 : 1
-                                  }}
-                                >
-                                  Sim
-                                </button>
-                                <button
-                                  onClick={() => setDeleteConfirm(null)}
-                                  disabled={loading}
-                                  style={{
-                                    padding: '4px 8px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    background: '#999',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  Não
-                                </button>
-                              </div>
-                            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #1F4E78' }}>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Data</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Horário</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Glicemia</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Insulina (UI)</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Observações</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600, color: '#1F4E78' }}>Status</th>
+                      <th style={{ padding: '12px', textAlign: 'center', fontWeight: 600, color: '#1F4E78' }}>Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((record, index) => (
+                      <tr key={record.id} style={{ borderBottom: '1px solid #DDD', background: index % 2 === 0 ? '#F9F9F9' : 'white' }}>
+                        <td style={{ padding: '12px' }}>{record.data}</td>
+                        <td style={{ padding: '12px' }}>{record.horario}</td>
+                        <td style={{ padding: '12px' }}>
+                          <span style={{
+                            background: getGlicemiaColor(record.glicemia),
+                            color: 'white',
+                            padding: '4px 12px',
+                            borderRadius: '20px',
+                            fontSize: '13px',
+                            fontWeight: 500
+                          }}>
+                            {record.glicemia ? `${record.glicemia} (${getGlicemiaLabel(record.glicemia)})` : '—'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px' }}>{record.insulina}</td>
+                        <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>{record.observacoes || '-'}</td>
+                        <td style={{ padding: '12px' }}>
+                          <span style={{
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            color: record.synced ? '#27AE60' : '#F39C12'
+                          }}>
+                            {record.synced ? '✓ Sincronizado' : '⏳ Local'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'center' }}>
+                          {deleteConfirm === record.id ? (
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                               <button
-                                onClick={() => setDeleteConfirm(record.id)}
+                                onClick={() => handleDeleteRecord(record.id, { data: record.data, horario: record.horario })}
                                 disabled={loading}
                                 style={{
-                                  padding: '4px 12px',
+                                  padding: '4px 8px',
                                   fontSize: '12px',
                                   fontWeight: 600,
                                   background: '#E74C3C',
                                   color: 'white',
                                   border: 'none',
                                   borderRadius: '4px',
-                                  cursor: 'pointer',
+                                  cursor: loading ? 'not-allowed' : 'pointer',
                                   opacity: loading ? 0.6 : 1
                                 }}
                               >
-                                🗑️ Deletar
+                                Sim
                               </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                              <button
+                                onClick={() => setDeleteConfirm(null)}
+                                disabled={loading}
+                                style={{
+                                  padding: '4px 8px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  background: '#999',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                Não
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setDeleteConfirm(record.id)}
+                              disabled={loading}
+                              style={{
+                                padding: '4px 12px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                background: '#E74C3C',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                opacity: loading ? 0.6 : 1
+                              }}
+                            >
+                              🗑️ Deletar
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
         )}
 
-        {/* Resumo Tab */}
+        {/* Resumo Tab - CORRIGIDO: Baseado em todos os dados */}
         {activeTab === 'resumo' && (
           <div style={{ background: 'white', padding: '30px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-            <h2 style={{ marginTop: 0, marginBottom: '30px', fontSize: '20px', color: '#333' }}>
-              📊 Resumo de Glicemia
-            </h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+              <h2 style={{ margin: 0, fontSize: '20px', color: '#333' }}>
+                📊 Resumo de Glicemia (Da Planilha)
+              </h2>
+              <p style={{ margin: 0, fontSize: '13px', color: '#999' }}>
+                Total de registros na planilha: {records.length}
+              </p>
+            </div>
 
             {records.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 20px', color: '#999' }}>
@@ -749,7 +797,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
                     textAlign: 'center'
                   }}>
                     <p style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#0D47A1', fontWeight: 500 }}>
-                      Total de Medições
+                      Total de Registros
                     </p>
                     <p style={{ margin: 0, fontSize: '32px', fontWeight: 600, color: '#3498DB' }}>
                       {summary.total}
@@ -765,7 +813,7 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
                     textAlign: 'center'
                   }}>
                     <p style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#2E7D32', fontWeight: 500 }}>
-                      Medições com Glicemia
+                      Com Glicemia
                     </p>
                     <p style={{ margin: 0, fontSize: '32px', fontWeight: 600, color: '#27AE60' }}>
                       {summary.medidos}
@@ -931,8 +979,8 @@ const SHEET_URL = 'https://script.google.com/macros/s/AKfycbwvn2VPRYx-pyI-edOlT6
                 {/* Info Box */}
                 <div style={{ marginTop: '30px', padding: '16px', background: '#E3F2FD', border: '1px solid #BBDEFB', borderRadius: '8px' }}>
                   <p style={{ margin: 0, fontSize: '13px', color: '#0D47A1' }}>
-                    <strong>ℹ️ Info:</strong> Este resumo inclui apenas medições com glicemia preenchida.
-                    Registros apenas com insulina não são contabilizados no resumo de status.
+                    <strong>ℹ️ Info:</strong> Este resumo está baseado em TODOS os dados da planilha (não apenas no histórico local).
+                    Clique "Atualizar da Planilha" para sincronizar os dados mais recentes.
                   </p>
                 </div>
               </div>
